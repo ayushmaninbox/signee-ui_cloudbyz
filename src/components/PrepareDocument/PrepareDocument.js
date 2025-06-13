@@ -41,12 +41,20 @@ const PrepareDocument = () => {
     WebViewer(
       {
         path: 'webviewer',
+        // Remove watermark by setting licenseKey (you'll need a valid license)
+        // licenseKey: 'your-license-key-here',
         disabledElements: [
           'ribbons',
           'toggleNotesButton',
           'searchButton',
           'menuButton',
         ],
+        // Hide watermark elements
+        css: `
+          .watermark { display: none !important; }
+          .Watermark { display: none !important; }
+          [data-element="watermark"] { display: none !important; }
+        `
       },
       viewer.current,
     ).then(instance => {
@@ -54,6 +62,15 @@ const PrepareDocument = () => {
 
       instance.UI.setToolbarGroup('toolbarGroup-View');
       setInstance(instance);
+
+      // Hide watermark after initialization
+      setTimeout(() => {
+        const iframe = viewer.current.querySelector('iframe');
+        if (iframe && iframe.contentDocument) {
+          const watermarkElements = iframe.contentDocument.querySelectorAll('.watermark, .Watermark, [data-element="watermark"]');
+          watermarkElements.forEach(el => el.style.display = 'none');
+        }
+      }, 1000);
 
       const iframeDoc = iframeWindow.document.body;
       iframeDoc.addEventListener('dragover', dragOver);
@@ -185,7 +202,10 @@ const PrepareDocument = () => {
     annotationManager.deleteAnnotations(annotsToDelete, null, true);
     await annotationManager.drawAnnotationsFromList(annotsToDraw);
     
-    // Store document data for signing
+    // Get document with form fields as XFDF
+    const xfdf = await annotationManager.exportAnnotations({ widgets: true, links: false });
+    
+    // Store document data for signing with XFDF
     const doc = documentViewer.getDocument();
     const data = await doc.getFileData();
     const blob = new Blob([data], { type: 'application/pdf' });
@@ -194,7 +214,8 @@ const PrepareDocument = () => {
     dispatch(setDocToSign({ 
       docRef: url, 
       docId: 'prepared-document',
-      blob: blob 
+      blob: blob,
+      xfdf: xfdf // Include the form fields
     }));
     dispatch(resetSignee());
     

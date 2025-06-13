@@ -23,6 +23,8 @@ const SignDocument = () => {
     WebViewer(
       {
         path: 'webviewer',
+        // Remove watermark by setting licenseKey (you'll need a valid license)
+        // licenseKey: 'your-license-key-here',
         disabledElements: [
           'ribbons',
           'toggleNotesButton',
@@ -36,6 +38,12 @@ const SignDocument = () => {
           'redo',
           'eraserToolButton'
         ],
+        // Hide watermark elements
+        css: `
+          .watermark { display: none !important; }
+          .Watermark { display: none !important; }
+          [data-element="watermark"] { display: none !important; }
+        `
       },
       viewer.current,
     ).then(async instance => {
@@ -44,6 +52,15 @@ const SignDocument = () => {
 
       instance.UI.setToolbarGroup('toolbarGroup-Insert');
 
+      // Hide watermark after initialization
+      setTimeout(() => {
+        const iframe = viewer.current.querySelector('iframe');
+        if (iframe && iframe.contentDocument) {
+          const watermarkElements = iframe.contentDocument.querySelectorAll('.watermark, .Watermark, [data-element="watermark"]');
+          watermarkElements.forEach(el => el.style.display = 'none');
+        }
+      }, 1000);
+
       // Load document from blob or URL
       if (doc && doc.docRef) {
         if (doc.blob) {
@@ -51,6 +68,18 @@ const SignDocument = () => {
         } else {
           documentViewer.loadDocument(doc.docRef);
         }
+
+        // Import form fields after document loads
+        documentViewer.addEventListener('documentLoaded', async () => {
+          if (doc.xfdf) {
+            try {
+              await annotationManager.importAnnotations(doc.xfdf);
+              console.log('Form fields imported successfully');
+            } catch (error) {
+              console.error('Error importing form fields:', error);
+            }
+          }
+        });
       } else {
         setToastMessage('No document to sign. Please prepare a document first.');
         setShowToast(true);
@@ -89,7 +118,11 @@ const SignDocument = () => {
   const nextField = () => {
     if (!annotationManager) return;
     
-    let annots = annotationManager.getAnnotationsList();
+    let annots = annotationManager.getAnnotationsList().filter(annot => 
+      annot instanceof annotationManager.getAnnotationsList()[0].constructor.WidgetAnnotation ||
+      annot.isFormFieldPlaceholder
+    );
+    
     if (annots[annotPosition]) {
       annotationManager.jumpToAnnotation(annots[annotPosition]);
       if (annots[annotPosition+1]) {
@@ -101,10 +134,14 @@ const SignDocument = () => {
   const prevField = () => {
     if (!annotationManager) return;
     
-    let annots = annotationManager.getAnnotationsList();
+    let annots = annotationManager.getAnnotationsList().filter(annot => 
+      annot instanceof annotationManager.getAnnotationsList()[0].constructor.WidgetAnnotation ||
+      annot.isFormFieldPlaceholder
+    );
+    
     if (annots[annotPosition]) {
       annotationManager.jumpToAnnotation(annots[annotPosition]);
-      if (annots[annotPosition-1]) {
+      if (annots[annotPosition-1] && annotPosition > 0) {
         setAnnotPosition(annotPosition-1);
       }
     }
@@ -114,7 +151,7 @@ const SignDocument = () => {
     if (!annotationManager) return;
     
     try {
-      const xfdf = await annotationManager.exportAnnotations({ widgets: false, links: false });
+      const xfdf = await annotationManager.exportAnnotations({ widgets: true, links: false });
       
       // Store signed document for viewing
       dispatch(setDocToView({ 

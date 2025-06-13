@@ -19,16 +19,33 @@ const ViewDocument = () => {
     WebViewer(
       {
         path: 'webviewer',
+        // Remove watermark by setting licenseKey (you'll need a valid license)
+        // licenseKey: 'your-license-key-here',
         disabledElements: [
           'ribbons',
           'toggleNotesButton',
           'contextMenuPopup',
         ],
+        // Hide watermark elements
+        css: `
+          .watermark { display: none !important; }
+          .Watermark { display: none !important; }
+          [data-element="watermark"] { display: none !important; }
+        `
       },
       viewer.current,
     ).then(async instance => {
       instance.UI.setToolbarGroup('toolbarGroup-View');
       setInstance(instance);
+
+      // Hide watermark after initialization
+      setTimeout(() => {
+        const iframe = viewer.current.querySelector('iframe');
+        if (iframe && iframe.contentDocument) {
+          const watermarkElements = iframe.contentDocument.querySelectorAll('.watermark, .Watermark, [data-element="watermark"]');
+          watermarkElements.forEach(el => el.style.display = 'none');
+        }
+      }, 1000);
 
       // Load document
       if (doc && doc.docRef) {
@@ -57,7 +74,11 @@ const ViewDocument = () => {
 
   const download = () => {
     if (instance) {
-      instance.UI.downloadPdf(true);
+      // Download without watermark
+      instance.UI.downloadPdf({
+        includeAnnotations: true,
+        flatten: true
+      });
     }
   };
 
