@@ -1,19 +1,18 @@
 import React, { useRef, useEffect, useState } from 'react';
 import { useSelector } from 'react-redux';
 import { navigate } from '@reach/router';
-import { Box, Column, Heading, Row, Stack, Button } from 'gestalt';
+import { Box, Column, Heading, Row, Stack, Button, Toast } from 'gestalt';
 import { selectDocToView } from './ViewDocumentSlice';
-import { storage } from '../../firebase/firebase';
 import WebViewer from '@pdftron/webviewer';
 import 'gestalt/dist/gestalt.css';
 import './ViewDocument.css';
 
 const ViewDocument = () => {
   const [instance, setInstance] = useState(null);
+  const [showToast, setShowToast] = useState(false);
+  const [toastMessage, setToastMessage] = useState('');
 
   const doc = useSelector(selectDocToView);
-  const { docRef } = doc;
-
   const viewer = useRef(null);
 
   useEffect(() => {
@@ -28,21 +27,38 @@ const ViewDocument = () => {
       },
       viewer.current,
     ).then(async instance => {
-      // select only the view group
       instance.UI.setToolbarGroup('toolbarGroup-View');
-
       setInstance(instance);
 
-      // load document
-      const storageRef = storage.ref();
-      const URL = await storageRef.child(docRef).getDownloadURL();
-      console.log(URL);
-      instance.Core.documentViewer.loadDocument(URL);
+      // Load document
+      if (doc && doc.docRef) {
+        if (doc.blob) {
+          instance.Core.documentViewer.loadDocument(doc.blob);
+        } else {
+          instance.Core.documentViewer.loadDocument(doc.docRef);
+        }
+        
+        // Import annotations if available
+        if (doc.xfdf) {
+          instance.Core.documentViewer.addEventListener('documentLoaded', () => {
+            instance.Core.annotationManager.importAnnotations(doc.xfdf);
+          });
+        }
+      } else {
+        setToastMessage('No document to view. Please prepare or sign a document first.');
+        setShowToast(true);
+        setTimeout(() => {
+          setShowToast(false);
+          navigate('/');
+        }, 3000);
+      }
     });
-  }, [docRef]);
+  }, [doc]);
 
   const download = () => {
-    instance.UI.downloadPdf(true);
+    if (instance) {
+      instance.UI.downloadPdf(true);
+    }
   };
 
   const doneViewing = async () => {
@@ -70,7 +86,7 @@ const ViewDocument = () => {
                 <Box padding={2}>
                   <Button
                     onClick={doneViewing}
-                    accessibilityLabel="complete signing"
+                    accessibilityLabel="complete viewing"
                     text="Done viewing"
                     iconEnd="check"
                   />
@@ -82,6 +98,22 @@ const ViewDocument = () => {
         <Column span={10}>
           <div className="webviewer" ref={viewer}></div>
         </Column>
+      </Box>
+      <Box
+        fit
+        dangerouslySetInlineStyle={{
+          __style: {
+            bottom: 50,
+            left: '50%',
+            transform: 'translateX(-50%)',
+          },
+        }}
+        paddingX={1}
+        position="fixed"
+      >
+        {showToast && (
+          <Toast color="red" text={toastMessage} />
+        )}
       </Box>
     </div>
   );

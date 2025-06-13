@@ -1,10 +1,10 @@
 import React, { useRef, useEffect, useState } from 'react';
 import { useSelector } from 'react-redux';
 import { navigate } from '@reach/router';
-import { Box, Column, Heading, Row, Stack, Button } from 'gestalt';
+import { Box, Column, Heading, Row, Stack, Button, Toast } from 'gestalt';
 import { selectDocToSign } from './SignDocumentSlice';
-import { storage, updateDocumentToSign } from '../../firebase/firebase';
-import { selectUser } from '../../firebase/firebaseSlice';
+import { setDocToView } from '../ViewDocument/ViewDocumentSlice';
+import { useDispatch } from 'react-redux';
 import WebViewer from '@pdftron/webviewer';
 import 'gestalt/dist/gestalt.css';
 import './SignDocument.css';
@@ -12,12 +12,11 @@ import './SignDocument.css';
 const SignDocument = () => {
   const [annotationManager, setAnnotationManager] = useState(null);
   const [annotPosition, setAnnotPosition] = useState(0);
+  const [showToast, setShowToast] = useState(false);
+  const [toastMessage, setToastMessage] = useState('');
 
   const doc = useSelector(selectDocToSign);
-  const user = useSelector(selectUser);
-  const { docRef, docId } = doc;
-  const { email } = user;
-
+  const dispatch = useDispatch();
   const viewer = useRef(null);
 
   useEffect(() => {
@@ -43,13 +42,24 @@ const SignDocument = () => {
       const { documentViewer, annotationManager, Annotations } = instance.Core;
       setAnnotationManager(annotationManager);
 
-      // select only the insert group
       instance.UI.setToolbarGroup('toolbarGroup-Insert');
 
-      // load document
-      const storageRef = storage.ref();
-      const URL = await storageRef.child(docRef).getDownloadURL();
-      documentViewer.loadDocument(URL);
+      // Load document from blob or URL
+      if (doc && doc.docRef) {
+        if (doc.blob) {
+          documentViewer.loadDocument(doc.blob);
+        } else {
+          documentViewer.loadDocument(doc.docRef);
+        }
+      } else {
+        setToastMessage('No document to sign. Please prepare a document first.');
+        setShowToast(true);
+        setTimeout(() => {
+          setShowToast(false);
+          navigate('/');
+        }, 3000);
+        return;
+      }
 
       const normalStyles = (widget) => {
         if (widget instanceof Annotations.TextWidgetAnnotation) {
@@ -69,18 +79,16 @@ const SignDocument = () => {
           annotations.forEach(function(annot) {
             if (annot instanceof Annotations.WidgetAnnotation) {
               Annotations.WidgetAnnotation.getCustomStyles = normalStyles;
-              if (!annot.fieldName.startsWith(email)) {
-                annot.Hidden = true;
-                annot.Listable = false;
-              }
             }
           });
         }
       });
     });
-  }, [docRef, email]);
+  }, [doc]);
 
   const nextField = () => {
+    if (!annotationManager) return;
+    
     let annots = annotationManager.getAnnotationsList();
     if (annots[annotPosition]) {
       annotationManager.jumpToAnnotation(annots[annotPosition]);
@@ -91,6 +99,8 @@ const SignDocument = () => {
   }
 
   const prevField = () => {
+    if (!annotationManager) return;
+    
     let annots = annotationManager.getAnnotationsList();
     if (annots[annotPosition]) {
       annotationManager.jumpToAnnotation(annots[annotPosition]);
@@ -101,9 +111,30 @@ const SignDocument = () => {
   }
 
   const completeSigning = async () => {
-    const xfdf = await annotationManager.exportAnnotations({ widgets: false, links: false });
-    await updateDocumentToSign(docId, email, xfdf);
-    navigate('/');
+    if (!annotationManager) return;
+    
+    try {
+      const xfdf = await annotationManager.exportAnnotations({ widgets: false, links: false });
+      
+      // Store signed document for viewing
+      dispatch(setDocToView({ 
+        docRef: doc.docRef, 
+        docId: 'signed-document',
+        blob: doc.blob,
+        xfdf: xfdf
+      }));
+      
+      setToastMessage('Document signed successfully! Redirecting to view...');
+      setShowToast(true);
+      setTimeout(() => {
+        setShowToast(false);
+        navigate('/viewDocument');
+      }, 2000);
+    } catch (error) {
+      setToastMessage('Error signing document. Please try again.');
+      setShowToast(true);
+      setTimeout(() => setShowToast(false), 3000);
+    }
   }
 
   return (
@@ -147,6 +178,22 @@ const SignDocument = () => {
         <Column span={10}>
           <div className="webviewer" ref={viewer}></div>
         </Column>
+      </Box>
+      <Box
+        fit
+        dangerouslySetInlineStyle={{
+          __style: {
+            bottom: 50,
+            left: '50%',
+            transform: 'translateX(-50%)',
+          },
+        }}
+        paddingX={1}
+        position="fixed"
+      >
+        {showToast && (
+          <Toast color="green" text={toastMessage} />
+        )}
       </Box>
     </div>
   );

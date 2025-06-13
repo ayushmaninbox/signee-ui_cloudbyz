@@ -10,10 +10,10 @@ import {
   Text,
   Button,
   SelectList,
+  Toast,
 } from 'gestalt';
 import { selectAssignees, resetSignee } from '../Assign/AssignSlice';
-import { storage, addDocumentToSign } from '../../firebase/firebase';
-import { selectUser } from '../../firebase/firebaseSlice';
+import { setDocToSign } from '../SignDocument/SignDocumentSlice';
 import WebViewer from '@pdftron/webviewer';
 import 'gestalt/dist/gestalt.css';
 import './PrepareDocument.css';
@@ -21,6 +21,8 @@ import './PrepareDocument.css';
 const PrepareDocument = () => {
   const [instance, setInstance] = useState(null);
   const [dropPoint, setDropPoint] = useState(null);
+  const [showToast, setShowToast] = useState(false);
+  const [toastMessage, setToastMessage] = useState('');
 
   const dispatch = useDispatch();
 
@@ -32,13 +34,9 @@ const PrepareDocument = () => {
     assigneesValues.length > 0 ? assigneesValues[0].value : '';
   const [assignee, setAssignee] = useState(initialAssignee);
 
-  const user = useSelector(selectUser);
-  const { uid, email } = user;
-
   const viewer = useRef(null);
   const filePicker = useRef(null);
 
-  // if using a class, equivalent of componentDidMount
   useEffect(() => {
     WebViewer(
       {
@@ -54,9 +52,7 @@ const PrepareDocument = () => {
     ).then(instance => {
       const { iframeWindow } = instance.UI;
 
-      // select only the view group
       instance.UI.setToolbarGroup('toolbarGroup-View');
-
       setInstance(instance);
 
       const iframeDoc = iframeWindow.document.body;
@@ -75,6 +71,13 @@ const PrepareDocument = () => {
   }, []);
 
   const applyFields = async () => {
+    if (!instance) {
+      setToastMessage('Please upload a document first');
+      setShowToast(true);
+      setTimeout(() => setShowToast(false), 3000);
+      return;
+    }
+
     const { Annotations, documentViewer } = instance.Core;
     const annotationManager = documentViewer.getAnnotationManager();
     const fieldManager = annotationManager.getFieldManager();
@@ -88,7 +91,6 @@ const PrepareDocument = () => {
         let field;
 
         if (typeof annot.custom !== 'undefined') {
-          // create a form field based on the type of annotation
           if (annot.custom.type === 'TEXT') {
             field = new Annotations.Forms.Field(
               annot.getContents() + Date.now() + index,
@@ -126,40 +128,31 @@ const PrepareDocument = () => {
               {
                 type: 'Tx',
                 value: 'm-d-yyyy',
-                // Actions need to be added for DatePickerWidgetAnnotation to recognize this field.
                 actions: {
                   F: [
                     {
                       name: 'JavaScript',
-                      // You can customize the date format here between the two double-quotation marks
-                      // or leave this blank to use the default format
                       javascript: 'AFDate_FormatEx("mmm d, yyyy");',
                     },
                   ],
                   K: [
                     {
                       name: 'JavaScript',
-                      // You can customize the date format here between the two double-quotation marks
-                      // or leave this blank to use the default format
                       javascript: 'AFDate_FormatEx("mmm d, yyyy");',
                     },
                   ],
                 },
               },
             );
-  
             inputAnnot = new Annotations.DatePickerWidgetAnnotation(field);
           } else {
-            // exit early for other annotations
-            annotationManager.deleteAnnotation(annot, false, true); // prevent duplicates when importing xfdf
+            annotationManager.deleteAnnotation(annot, false, true);
             return;
           }
         } else {
-          // exit early for other annotations
           return;
         }
 
-        // set position
         inputAnnot.PageNumber = annot.getPageNumber();
         inputAnnot.X = annot.getX();
         inputAnnot.Y = annot.getY();
@@ -172,10 +165,8 @@ const PrepareDocument = () => {
           inputAnnot.Height = annot.getWidth();
         }
 
-        // delete original annotation
         annotsToDelete.push(annot);
 
-        // customize styles of the form field
         Annotations.WidgetAnnotation.getCustomStyles = function (widget) {
           if (widget instanceof Annotations.SignatureWidgetAnnotation) {
             return {
@@ -185,29 +176,46 @@ const PrepareDocument = () => {
         };
         Annotations.WidgetAnnotation.getCustomStyles(inputAnnot);
 
-        // draw the annotation the viewer
         annotationManager.addAnnotation(inputAnnot);
         fieldManager.addField(field);
         annotsToDraw.push(inputAnnot);
       }),
     );
 
-    // delete old annotations
     annotationManager.deleteAnnotations(annotsToDelete, null, true);
-
-    // refresh viewer
     await annotationManager.drawAnnotationsFromList(annotsToDraw);
-    await uploadForSigning();
+    
+    // Store document data for signing
+    const doc = documentViewer.getDocument();
+    const data = await doc.getFileData();
+    const blob = new Blob([data], { type: 'application/pdf' });
+    const url = URL.createObjectURL(blob);
+    
+    dispatch(setDocToSign({ 
+      docRef: url, 
+      docId: 'prepared-document',
+      blob: blob 
+    }));
+    dispatch(resetSignee());
+    
+    setToastMessage('Document prepared successfully! Redirecting to sign...');
+    setShowToast(true);
+    setTimeout(() => {
+      setShowToast(false);
+      navigate('/signDocument');
+    }, 2000);
   };
 
   const addField = (type, point = {}, name = '', value = '', flag = {}) => {
+    if (!instance) return;
+    
     const { documentViewer, Annotations } = instance.Core;
     const annotationManager = documentViewer.getAnnotationManager();
     const doc = documentViewer.getDocument();
     const displayMode = documentViewer.getDisplayModeManager().getDisplayMode();
     const page = displayMode.getSelectedPages(point, point);
     if (!!point.x && page.first == null) {
-      return; //don't add field to an invalid page location
+      return;
     }
     const page_idx =
       page.first !== null ? page.first : documentViewer.getCurrentPage();
@@ -237,7 +245,6 @@ const PrepareDocument = () => {
       name: `${assignee}_${type}_`,
     };
 
-    // set the type of annot
     textAnnot.setContents(textAnnot.custom.name);
     textAnnot.FontSize = '' + 20.0 / zoom + 'px';
     textAnnot.FillColor = new Annotations.Color(211, 211, 211, 0.5);
@@ -252,30 +259,6 @@ const PrepareDocument = () => {
     annotationManager.addAnnotation(textAnnot, true);
     annotationManager.redrawAnnotation(textAnnot);
     annotationManager.selectAnnotation(textAnnot);
-  };
-
-  const uploadForSigning = async () => {
-    // upload the PDF with fields as AcroForm
-    const storageRef = storage.ref();
-    const referenceString = `docToSign/${uid}${Date.now()}.pdf`;
-    const docRef = storageRef.child(referenceString);
-    const { documentViewer, annotationManager } = instance.Core;
-    const doc = documentViewer.getDocument();
-    const xfdfString = await annotationManager.exportAnnotations({ widgets: true, fields: true });
-    const data = await doc.getFileData({ xfdfString });
-    const arr = new Uint8Array(data);
-    const blob = new Blob([arr], { type: 'application/pdf' });
-    docRef.put(blob).then(function (snapshot) {
-      console.log('Uploaded the blob');
-    });
-
-    // create an entry in the database
-    const emails = assignees.map(assignee => {
-      return assignee.email;
-    });
-    await addDocumentToSign(uid, email, referenceString, emails);
-    dispatch(resetSignee());
-    navigate('/');
   };
 
   const dragOver = e => {
@@ -407,8 +390,8 @@ const PrepareDocument = () => {
                 <Box padding={2}>
                   <Button
                     onClick={applyFields}
-                    accessibilityLabel="Send for signing"
-                    text="Send"
+                    accessibilityLabel="Prepare for signing"
+                    text="Prepare for Signing"
                     iconEnd="send"
                   />
                 </Box>
@@ -421,6 +404,22 @@ const PrepareDocument = () => {
         </Column>
       </Box>
       <input type="file" ref={filePicker} style={{ display: 'none' }} />
+      <Box
+        fit
+        dangerouslySetInlineStyle={{
+          __style: {
+            bottom: 50,
+            left: '50%',
+            transform: 'translateX(-50%)',
+          },
+        }}
+        paddingX={1}
+        position="fixed"
+      >
+        {showToast && (
+          <Toast color="green" text={toastMessage} />
+        )}
+      </Box>
     </div>
   );
 };
